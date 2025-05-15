@@ -11,4 +11,6 @@
 
 2200 7009 5711 8671 (Т-Банк)
 
+https://youtu.be/9vLdm1SSIww
+
 ![](image.png)

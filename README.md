@@ -20,3 +20,4 @@ If you’d like to support development, you can donate to my Russian bank card:
 
 2200 7009 5711 8671 (T-Bank)
 
+![](image.png)

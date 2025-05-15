@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Project</title>
+    <script>
+        // Определяем язык интерфейса GitHub
+        const lang = navigator.language || navigator.userLanguage;
+        if (lang.startsWith("ru")) {
+            window.location.href = "README_RU.md";
+        } else {
+            window.location.href = "README_EN.md";
+        }
+    </script>
+</head>
+<body>
+    <p>Redirecting...</p>
+</body>
+</html>

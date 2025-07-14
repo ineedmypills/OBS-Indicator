@@ -10,9 +10,9 @@
 * Clip save icon and text
 
 **Fork Improvements**
--[x] Switching from Tkinter to PyQt 5
--[x] Separate recording and replay buffer icons
--[x] Customization (many more settings)
--[x] New stylish minimalistic icons and smooth animations
--[x] Caption when saving a clip
--[ ] Icons are displayed everywhere (even in full-screen applications)
+- [x] Switching from Tkinter to PyQt 5
+- [x] Separate recording and replay buffer icons
+- [x] Customization (many more settings)
+- [x] New stylish minimalistic icons and smooth animations
+- [x] Caption when saving a clip
+- [ ] Icons are displayed everywhere (even in full-screen applications)

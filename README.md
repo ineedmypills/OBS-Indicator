@@ -2,8 +2,8 @@ OBS Indicator
 -
 A Python/PyQt 5 overlay that shows recording and replay buffer status icons (in the style of NVIDIA Geforce Instant Replay) on top of all windows (except exclusive fullscreen), with no external dependencies, and fully visible in your OBS captures.
 
-[!IMPORTANT]
-Make sure [PyQt](https://pypi.org/project/PyQt5/) is installed in the Python directory for OBS!
+> [!IMPORTANT]
+> Make sure [PyQt](https://pypi.org/project/PyQt5/) is installed in the Python directory for OBS!
 
 **Functionality**
 * Recording icon

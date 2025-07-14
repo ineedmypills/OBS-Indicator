@@ -5,9 +5,12 @@ A super-lightweight Python/Tkinter overlay that shows recording and Instant-Repl
 **Functionality**
 * Recording icon
 * Replay buffer icon
-* Clip save icon
+* Clip save icon and text
 
 **Fork Improvements**
-* New icons
-* Separate recording and replay buffer icons
-* Icons are displayed everywhere (even in full-screen applications)
+[x] Switching from Tkinter to PyQt
+[x] Separate recording and replay buffer icons
+[x] Customization (many more settings)
+[x] New stylish minimalistic icons and smooth animations
+[x] Caption when saving a clip
+[] Icons are displayed everywhere (even in full-screen applications)

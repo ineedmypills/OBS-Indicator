@@ -4,12 +4,12 @@
 > [!IMPORTANT]
 > Make sure [PyQt](https://pypi.org/project/PyQt5/) is installed in the Python directory for OBS!
 
-**Functionality**
+### **Functionality**
 * Recording icon
 * Replay buffer icon
 * Clip save icon and text
 
-**Fork Improvements**
+### **Fork Improvements**
 - [x] Switching from Tkinter to PyQt 5
 - [x] Separate recording and replay buffer icons
 - [x] Customization (many more settings)

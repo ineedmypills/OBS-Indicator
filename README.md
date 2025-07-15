@@ -19,6 +19,8 @@
 > [!WARNING]  
 > This script **CANNOT** display indicators in **exclusive full-screen applications**, *but this may be fixed in the future*...
 > 
+> It is *almost* impossible to implement this feature in a simple Python script....
+> 
 > Use **windowed full-screen mode**!
 ## ⚙️ Installation & Setup
 

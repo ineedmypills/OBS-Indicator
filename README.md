@@ -73,3 +73,31 @@ You can customize the indicator's appearance directly within OBS.
 
 > [!IMPORTANT] 
 > If the indicator disappears after you change its settings, you'll need to restart OBS Studio for the changes to take effect.
+
+## ❓ Help and Support
+
+If you encounter any issues, have questions, or wish to contribute to the development of OBS Indicator, here's how you can get help or assist the project:
+
+### Reporting Issues
+
+If you come across a bug, unusual behavior, or have a suggestion for improvement, please create an **Issue** on the project's GitHub page.
+
+1.  Go to the project's [Issues page](https://github.com/ineedmypills/OBS-Indicator/issues).
+2.  Click the **"New issue"** button.
+3.  Describe your problem in as much detail as possible:
+    * Provide steps to reproduce the error.
+    * Attach screenshots or videos if they are helpful.
+    * Specify the OBS Studio and Python versions you are using.
+
+### Pull Requests
+
+All improvements and fixes are welcome! If you have programming skills and wish to contribute:
+
+1.  **Fork** the repository.
+2.  Create a new branch for your changes.
+3.  Implement your changes in the code.
+4.  Submit a **Pull Request** to the main repository. Please ensure your code adheres to the existing project style and is well-documented.
+
+### General Inquiries
+
+For general questions or discussions that aren't bug reports or pull requests, you can also use the [Issues section](https://github.com/ineedmypills/OBS-Indicator/issues) or reach out to the OBS community on relevant forums.

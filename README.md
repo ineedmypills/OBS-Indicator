@@ -11,12 +11,13 @@
 
 ## ❤️ Key Features
 
-- ✅ **Feels like ShadowPlay**: Familiar, intuitive icons for recording and replay saving.
-- ✅ **Always on Top**: Stays visible over your games ~~and full-screen applications~~.
-- ✅ **Simple Setup**: A clear, step-by-step guide to get you started in minutes.
-- ✅ **Lightweight**: Minimal system impact. It won't slow down your stream or recording.
-- ✅ **Fully Customizable**: Adjust the position, style, and opacity to match your preference.
-
+- **Feels like ShadowPlay**: Familiar, intuitive icons for recording and replay saving.
+- **Always on Top**: Stays visible over your games ~~and full-screen applications~~.
+- **Simple Setup**: A clear, step-by-step guide to get you started in minutes.
+- **Lightweight**: Minimal system impact. It won't slow down your stream or recording.
+- **Fully Customizable**: Adjust the position, style, and opacity to match your preference.
+> [!WARNING]  
+> This script **CANNOT** display indicators in **full-screen applications**, *but this may be fixed in the future*...
 ## ⚙️ Installation & Setup
 
 Just follow these 3 steps to get up and running.
@@ -66,5 +67,5 @@ You can customize the indicator's appearance directly within OBS.
     -   **Padding**: Fine-tune the icon's exact position with pixel offsets.
     -   **Opacity**: Make the icon more or less transparent.
 
-> [!WARNING] 
+> [!IMPORTANT] 
 > If the indicator disappears after you change its settings, you'll need to restart OBS Studio for the changes to take effect.

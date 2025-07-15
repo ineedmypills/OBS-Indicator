@@ -42,7 +42,7 @@ The script uses the `PyQt5` library to display the icons.
 5. Navigate to your OBS Python folder
 6. Install PyQt5 using pip:
     ```bash
-    {path to python} -m pip install PyQt5
+    {path to python.exe} -m pip install PyQt5
     ```
 
 ### Step 3: Add the Script to OBS

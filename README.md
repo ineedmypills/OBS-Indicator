@@ -17,7 +17,9 @@
 - **Lightweight**: Minimal system impact. It won't slow down your stream or recording.
 - **Fully Customizable**: Adjust the position, style, and opacity to match your preference.
 > [!WARNING]  
-> This script **CANNOT** display indicators in **full-screen applications**, *but this may be fixed in the future*...
+> This script **CANNOT** display indicators in **exclusive full-screen applications**, *but this may be fixed in the future*...
+> 
+> Use **windowed full-screen mode**!
 ## ⚙️ Installation & Setup
 
 Just follow these 3 steps to get up and running.

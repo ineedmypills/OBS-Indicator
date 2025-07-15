@@ -65,3 +65,6 @@ You can customize the indicator's appearance directly within OBS.
     -   **Screen Position**: Choose which corner of the screen to display the icon in.
     -   **Padding**: Fine-tune the icon's exact position with pixel offsets.
     -   **Opacity**: Make the icon more or less transparent.
+
+> [!WARNING] 
+> If the indicator disappears after you change its settings, you'll need to restart OBS Studio for the changes to take effect.

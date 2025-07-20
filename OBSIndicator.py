@@ -3,23 +3,29 @@ import threading
 import sys
 import os
 import time
-import math
-from enum import Enum
 import ctypes
+import logging
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Dict, Any, Tuple, Optional, List
+
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 HAS_PYSIDE = False
 try:
     from PySide2.QtWidgets import QApplication, QWidget
-    from PySide2.QtCore import Qt, QTimer, QPoint, QRect, QObject, Signal, QPointF, QRectF, QMetaObject
-    from PySide2.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QGuiApplication
-
+    from PySide2.QtCore import (Qt, QTimer, QPoint, QRect, QObject, Signal,
+                                QPointF, QRectF, QMetaObject)
+    from PySide2.QtGui import (QPainter, QColor, QBrush, QPen, QPainterPath,
+                               QGuiApplication, QPaintEvent, QWindow)
     HAS_PYSIDE = True
 except ImportError:
+    log.warning("PySide2 library not found. The overlay will not be displayed.")
     pass
 
-overlay_app = None
-gui_thread = None
-
+overlay_app: Optional['OverlayApp'] = None
+gui_thread: Optional[threading.Thread] = None
 
 class Corner(Enum):
     TOP_LEFT = "top-left"
@@ -28,695 +34,610 @@ class Corner(Enum):
     BOTTOM_RIGHT = "bottom-right"
     OFF = "off"
 
-
 class Shape(Enum):
     CIRCLE = "circle"
     SQUARE = "square"
     ROUNDED = "rounded"
 
+class Animation:
+    SPEED = 0.15
+    FRAME_INTERVAL_MS = 16
+    SNAP_THRESHOLD = 0.01
+    POSITION_SNAP_THRESHOLD = 0.5
 
-ANIMATION_SPEED = 0.15
-TRANSITION_SPEED = 0.3
-THREAD_JOIN_TIMEOUT = 2.0
+class Timeouts:
+    THREAD_JOIN = 2.0
+    INITIAL_STATE_DELAY_MS = 200
+    SCREEN_GEOMETRY_CHECK_MS = 1000
+
+class Draw:
+    BG_ROUNDED_RECT_RADIUS_RATIO = 0.3
+    INDICATOR_ROUNDED_RECT_RADIUS_RATIO = 0.3
+    PAUSE_PEN_WIDTH_RATIO = 0.18
+    PAUSE_BAR_HEIGHT_RATIO = 0.65
+    PAUSE_BAR_SPACING_RATIO = 0.35
+    CHECKMARK_PEN_WIDTH_RATIO = 0.2
+    CHECKMARK_P1 = QPointF(-0.30, 0.05)
+    CHECKMARK_P2 = QPointF(-0.10, 0.25)
+    CHECKMARK_P3 = QPointF(0.30, -0.25)
+    CHECKMARK_ANIM_SPLIT = 0.35
+    DIM_OPACITY = 0.3
 
 DEFAULT_SETTINGS = {
-    "corner_rec": "top-right",
-    "corner_buf": "top-right",
-    "size": 10,
-    "margin": 10,
-    "opacity": 50,
-    "rec_color": 0xFF5555,
-    "rec_pause_color": 0xFFAA00,
-    "buf_color": 0x55FF55,
-    "buf_saved_color": 0x5555FF,
-    "bg_opacity": 50,
-    "bg_size_percent": 300,
-    "indicator_shape": "circle",
-    "bg_shape": "circle",
-    "fade_effect": True,
-    "smooth_position": True,
-    "animate_pause": True,
-    "animate_checkmark": True
-}
-
-settings = DEFAULT_SETTINGS.copy()
-
-rec_status = {
-    "active": False,
-    "paused": False,
-    "anim": 0.0,
-    "pause_anim": 0.0
-}
-
-buf_status = {
-    "active": False,
-    "saved": False,
-    "saved_time": 0.0,
-    "anim": 0.0,
-    "current_pos": (0.0, 0.0),
-    "target_pos": (0.0, 0.0),
-    "checkmark_anim": 0.0
+    "corner_rec": Corner.TOP_RIGHT.value,
+    "corner_buf": Corner.TOP_RIGHT.value,
+    "size": 10, "margin": 10, "opacity": 50,
+    "rec_color": 0xFF5555, "rec_pause_color": 0xFFAA00,
+    "buf_color": 0x55FF55, "buf_saved_color": 0x5555FF,
+    "bg_opacity": 50, "bg_size_percent": 300,
+    "indicator_shape": Shape.CIRCLE.value, "bg_shape": Shape.CIRCLE.value,
+    "fade_effect": True, "smooth_position": True,
+    "animate_pause": True, "animate_checkmark": True,
+    "checkmark_duration": 1.5
 }
 
 STRINGS = {
-    "description": "Recording and replay buffer indicators with animations",
-    "size": "Indicator Size",
-    "margin": "Margin",
-    "opacity": "Opacity (%)",
-    "rec_color": "Active Color",
-    "rec_pause_color": "Paused Color",
-    "buf_color": "Active Color",
-    "buf_saved_color": "Saved Color",
-    "bg_opacity": "Background Opacity (%)",
-    "bg_size_percent": "Background Size (%)",
-    "indicator_shape": "Shape",
-    "bg_shape": "Background Shape",
-    "fade_effect": "Fade Effect",
-    "smooth_position": "Smooth Position Animation",
-    "animate_pause": "Animate Pause Icon",
-    "animate_checkmark": "Animate Checkmark Icon",
-    "shape_opts": [("Circle", "circle"), ("Square", "square"), ("Rounded", "rounded")],
+    "description": "Animated indicators for recording and replay buffer.",
+    "size": "Indicator Size", "margin": "Margin from Edge", "opacity": "Opacity (%)",
+    "rec_color": "Color (Active)", "rec_pause_color": "Color (Paused)",
+    "buf_color": "Color (Active)", "buf_saved_color": "Color (Saved)",
+    "bg_opacity": "Background Opacity (%)", "bg_size_percent": "Background Size (%)",
+    "indicator_shape": "Indicator Shape", "bg_shape": "Background Shape",
+    "fade_effect": "Fade Effect", "smooth_position": "Smooth Movement",
+    "animate_pause": "Animate Pause Icon", "animate_checkmark": "Animate Checkmark Icon",
+    "checkmark_duration": "Checkmark Duration (s)",
+    "shape_opts": [("Circle", Shape.CIRCLE.value), ("Square", Shape.SQUARE.value), ("Rounded", Shape.ROUNDED.value)],
     "corner_opts": [
-        ("Top Left", "top-left"),
-        ("Top Right", "top-right"),
-        ("Bottom Left", "bottom-left"),
-        ("Bottom Right", "bottom-right"),
-        ("Off", "off")
+        ("Top Left", Corner.TOP_LEFT.value), ("Top Right", Corner.TOP_RIGHT.value),
+        ("Bottom Left", Corner.BOTTOM_LEFT.value), ("Bottom Right", Corner.BOTTOM_RIGHT.value),
+        ("Off", Corner.OFF.value)
     ]
 }
 
+def obs_color_to_rgb(obs_color: int) -> int:
+    return ((obs_color & 0xFF) << 16) | (obs_color & 0xFF00) | ((obs_color >> 16) & 0xFF)
 
-def obs_color_to_rgb(obs_color):
-    aa = (obs_color >> 24) & 0xFF
-    bb = (obs_color >> 16) & 0xFF
-    gg = (obs_color >> 8) & 0xFF
-    rr = obs_color & 0xFF
-    return (rr << 16) | (gg << 8) | bb
+def rgb_to_obs_color(rgb_color: int) -> int:
+    return (0xFF << 24) | ((rgb_color & 0xFF) << 16) | (rgb_color & 0xFF00) | ((rgb_color >> 16) & 0xFF)
 
-
-def int_to_hex(color_int):
-    return f"#{(color_int >> 16) & 0xFF:02X}{(color_int >> 8) & 0xFF:02X}{color_int & 0xFF:02X}"
-
-
-def ease_in_out_sine(t):
-    return -(math.cos(math.pi * t) - 1) / 2
-
-
-def lerp(start, end, alpha):
+def lerp(start: float, end: float, alpha: float) -> float:
     return start + (end - start) * alpha
 
-
-def cubic_bezier_ease(t):
+def cubic_bezier_ease(t: float) -> float:
     return 1 - (1 - t) ** 3
 
+if HAS_PYSIDE:
+    @dataclass
+    class AnimatedValue:
+        current: float = 0.0
+        target: float = 0.0
+
+        def set_target(self, new_target: float, immediate: bool = False) -> None:
+            self.target = float(new_target)
+            if immediate:
+                self.current = self.target
+
+        def update(self, speed: float, enabled: bool) -> bool:
+            if self.current == self.target:
+                return False
+            if not enabled or abs(self.current - self.target) < Animation.SNAP_THRESHOLD:
+                self.current = self.target
+            else:
+                self.current = lerp(self.current, self.target, speed)
+            return True
+
+    @dataclass
+    class IndicatorState:
+        active: bool = False
+        visibility: AnimatedValue = field(default_factory=AnimatedValue)
+        position: QPointF = field(default_factory=QPointF)
+        target_position: QPointF = field(default_factory=QPointF)
+
+    @dataclass
+    class RecordingState(IndicatorState):
+        paused: bool = False
+        pause_icon: AnimatedValue = field(default_factory=AnimatedValue)
+
+    @dataclass
+    class BufferState(IndicatorState):
+        saved: bool = False
+        saved_time: float = 0.0
+        checkmark_icon: AnimatedValue = field(default_factory=AnimatedValue)
+        dim_effect: AnimatedValue = field(default_factory=lambda: AnimatedValue(current=1.0, target=1.0))
 
 if HAS_PYSIDE:
     class SignalEmitter(QObject):
         rec_status_changed = Signal(bool, bool)
         buf_status_changed = Signal(bool, bool)
-        settings_updated = Signal()
-
+        settings_updated = Signal(dict)
 
     class OverlayWindow(QWidget):
-        def __init__(self, emitter):
+        def __init__(self, emitter: SignalEmitter, initial_settings: Dict[str, Any]):
             super().__init__()
             self.emitter = emitter
-            self.animation_timer = QTimer(self)
-            self.update_timer = QTimer(self)
+            self.settings = initial_settings
             self.closing = False
-            self.positions_cache = {}
+            self.positions_cache: Dict[str, QPoint] = {}
             self.current_screen_geometry = QRect()
 
-            self.init_ui()
-            self.setup_signals()
+            self.rec_state = RecordingState()
+            self.buf_state = BufferState()
 
-        def init_ui(self):
+            self._init_ui()
+            self._setup_signals()
+            self._setup_timers()
+
+        def _init_ui(self) -> None:
             self.setWindowTitle("OBS Status Overlay")
             self.setAttribute(Qt.WA_TranslucentBackground)
             self.setAttribute(Qt.WA_ShowWithoutActivating)
             self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
+            self.setWindowOpacity(self.settings["opacity"] / 100.0)
+            self._update_geometry()
+            self._setup_win32_attributes()
 
-            self.setWindowOpacity(settings["opacity"] / 100.0)
-            self.update_position()
-            self.setup_win32_attributes()
-
-        def setup_win32_attributes(self):
+        def _setup_win32_attributes(self) -> None:
             if os.name != 'nt':
                 return
-
             try:
-                hwnd = int(self.winId())
-                ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002)
-
+                HWND_TOPMOST = -1
+                SWP_NOMOVE, SWP_NOSIZE = 0x0002, 0x0001
                 GWL_EXSTYLE = -20
-                WS_EX_LAYERED = 0x00080000
-                WS_EX_TRANSPARENT = 0x00000020
+                WS_EX_LAYERED, WS_EX_TRANSPARENT = 0x00080000, 0x00000020
+
+                hwnd = int(self.winId())
+                ctypes.windll.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
                 ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT
-                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
-            except Exception:
-                pass
+                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+            except Exception as e:
+                log.warning(f"Failed to set window attributes for click-through: {e}")
 
-        def setup_signals(self):
-            self.emitter.rec_status_changed.connect(self.update_rec_status, Qt.QueuedConnection)
-            self.emitter.buf_status_changed.connect(self.update_buf_status, Qt.QueuedConnection)
-            self.emitter.settings_updated.connect(self.reload_settings, Qt.QueuedConnection)
+        def _setup_signals(self) -> None:
+            self.emitter.rec_status_changed.connect(self.on_rec_status_changed, Qt.QueuedConnection)
+            self.emitter.buf_status_changed.connect(self.on_buf_status_changed, Qt.QueuedConnection)
+            self.emitter.settings_updated.connect(self.on_settings_updated, Qt.QueuedConnection)
 
+        def _setup_timers(self) -> None:
+            self.animation_timer = QTimer(self)
             self.animation_timer.timeout.connect(self.update_animations)
-            self.animation_timer.start(16)
+            self.animation_timer.start(Animation.FRAME_INTERVAL_MS)
 
-            self.update_timer.timeout.connect(self.update_position)
-            self.update_timer.start(1000)
+            self.geometry_timer = QTimer(self)
+            self.geometry_timer.timeout.connect(self._update_geometry)
+            self.geometry_timer.start(Timeouts.SCREEN_GEOMETRY_CHECK_MS)
 
-        def closeEvent(self, event):
+        def closeEvent(self, event: QPaintEvent) -> None:
             self.closing = True
             self.animation_timer.stop()
-            self.update_timer.stop()
+            self.geometry_timer.stop()
             self.deleteLater()
             super().closeEvent(event)
 
-        def update_rec_status(self, active, paused):
-            if self.closing:
-                return
-            rec_status["active"] = active
-            rec_status["paused"] = paused
+        def on_rec_status_changed(self, active: bool, paused: bool) -> None:
+            if self.closing or not self.isVisible(): return
+            self.rec_state.active = active
+            self.rec_state.paused = paused
 
-        def update_buf_status(self, active, saved):
-            if self.closing:
-                return
-            buf_status["active"] = active
+        def on_buf_status_changed(self, active: bool, saved: bool) -> None:
+            if self.closing or not self.isVisible(): return
             if saved:
-                buf_status["saved"] = True
-                buf_status["saved_time"] = time.time()
+                self.buf_state.active = True
+                self.buf_state.saved = True
+                self.buf_state.saved_time = time.monotonic()
+            else:
+                self.buf_state.active = active
 
-        def reload_settings(self):
-            if self.closing:
-                return
-            self.setWindowOpacity(settings["opacity"] / 100.0)
+        def on_settings_updated(self, new_settings: Dict[str, Any]) -> None:
+            if self.closing or not self.isVisible(): return
+            self.settings = new_settings
+            self.setWindowOpacity(self.settings["opacity"] / 100.0)
             self.positions_cache.clear()
-            self.update_position()
+            self._update_geometry()
+            self.update()
 
-        def update_position(self):
-            if self.closing:
-                return
+        def _update_geometry(self) -> None:
+            if self.closing: return
+
             screen = QGuiApplication.primaryScreen()
             if not screen:
+                log.warning("Primary screen not found. Overlay position may be incorrect.")
                 return
-            screen_geometry = screen.geometry()
-            if screen_geometry != self.current_screen_geometry:
+
+            if (screen_geometry := screen.geometry()) != self.current_screen_geometry:
                 self.setGeometry(screen_geometry)
                 self.current_screen_geometry = screen_geometry
                 self.positions_cache.clear()
+                self.update()
 
-        def paintEvent(self, event):
-            if self.closing:
-                return
+        def _calculate_position(self, corner: str, index: int = 0) -> Optional[QPoint]:
+            if not self.current_screen_geometry.isValid(): return None
 
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing)
-
-            if settings["corner_rec"] != "off" and rec_status["anim"] > 0.005:
-                pos = self.calculate_position(settings["corner_rec"])
-                if pos:
-                    self.draw_background(painter, pos, rec_status["anim"], settings)
-
-                    p_anim = rec_status["pause_anim"]
-                    dot_opacity = 1.0 - p_anim
-                    if dot_opacity > 0.001:
-                        self.draw_indicator(painter, pos, rec_status, settings["rec_color"], settings, dot_opacity)
-
-                    if p_anim > 0.001:
-                        self.draw_pause_icon(painter, pos, p_anim, settings["rec_pause_color"], settings, p_anim)
-
-            if settings["corner_buf"] != "off":
-                should_draw_buffer = buf_status["anim"] > 0.005 or buf_status["checkmark_anim"] > 0.001
-                if should_draw_buffer:
-                    index = 1 if (rec_status["active"] and
-                                  settings["corner_rec"] == settings["corner_buf"] and
-                                  settings["corner_rec"] != "off") else 0
-                    pos = self.calculate_position(settings["corner_buf"], index)
-
-                    if pos:
-                        buf_status["target_pos"] = (pos.x(), pos.y())
-                        if buf_status["current_pos"] == (0.0, 0.0):
-                            buf_status["current_pos"] = buf_status["target_pos"]
-                        current_pos = QPoint(*map(int, buf_status["current_pos"]))
-
-                        bg_anim_value = max(buf_status["anim"], buf_status["checkmark_anim"])
-                        self.draw_background(painter, current_pos, bg_anim_value, settings)
-
-                        indicator_opacity_mult = 1.0 - buf_status["checkmark_anim"]
-                        if buf_status["active"] and indicator_opacity_mult > 0.001:
-                            self.draw_indicator(painter, current_pos, buf_status, settings["buf_color"], settings,
-                                                indicator_opacity_mult)
-
-                        checkmark_anim_val = buf_status["checkmark_anim"]
-                        if checkmark_anim_val > 0.001:
-                            self.draw_checkmark(painter, current_pos, checkmark_anim_val, settings["buf_saved_color"],
-                                                settings, checkmark_anim_val)
-                else:
-                    buf_status["current_pos"] = (0.0, 0.0)
-
-        def calculate_position(self, corner, index=0):
-            if not self.current_screen_geometry.isValid():
-                return None
-
-            size = settings["size"]
-            margin = settings["margin"]
-            bg_size = int(size * settings["bg_size_percent"] / 100)
+            size = self.settings["size"]
+            margin = self.settings["margin"]
+            bg_size = int(size * self.settings["bg_size_percent"] / 100)
             radius = bg_size // 2
+            if not radius: return None
 
-            if not radius:
-                return None
-
-            cache_key = f"{corner}_{index}_{self.width()}x{self.height()}"
+            cache_key = f"{corner}_{index}_{size}_{margin}_{self.settings['bg_size_percent']}"
             if cache_key in self.positions_cache:
                 return self.positions_cache[cache_key]
 
-            width = self.width()
-            height = self.height()
+            width, height = self.width(), self.height()
             offset = index * (bg_size + margin)
 
-            if corner == "top-left":
-                pos = QPoint(margin + radius + offset, margin + radius)
-            elif corner == "top-right":
-                pos = QPoint(width - margin - radius - offset, margin + radius)
-            elif corner == "bottom-left":
-                pos = QPoint(margin + radius + offset, height - margin - radius)
-            elif corner == "bottom-right":
-                pos = QPoint(width - margin - radius - offset, height - margin - radius)
-            else:
-                return None
-
-            self.positions_cache[cache_key] = pos
+            pos_map = {
+                Corner.TOP_LEFT.value: QPoint(margin + radius + offset, margin + radius),
+                Corner.TOP_RIGHT.value: QPoint(width - margin - radius - offset, margin + radius),
+                Corner.BOTTOM_LEFT.value: QPoint(margin + radius + offset, height - margin - radius),
+                Corner.BOTTOM_RIGHT.value: QPoint(width - margin - radius - offset, height - margin - radius)
+            }
+            if pos := pos_map.get(corner):
+                self.positions_cache[cache_key] = pos
             return pos
 
-        def draw_background(self, painter, pos, anim_value, current_settings):
-            if not pos:
-                return
+        def update_animations(self) -> None:
+            if self.closing: return
 
-            size = current_settings["size"]
-            if size <= 0:
-                return
+            self.rec_state.visibility.set_target(self.rec_state.active)
+            self.rec_state.pause_icon.set_target(self.rec_state.paused)
 
-            bg_size = int(size * current_settings["bg_size_percent"] / 100)
-            if bg_size <= 0:
-                return
+            self.buf_state.visibility.set_target(self.buf_state.active)
 
-            bg_radius = bg_size // 2
+            if self.buf_state.saved and time.monotonic() - self.buf_state.saved_time > self.settings["checkmark_duration"]:
+                self.buf_state.saved = False
+                self.buf_state.saved_time = 0.0
+            self.buf_state.checkmark_icon.set_target(self.buf_state.saved)
 
-            alpha = int(255 * anim_value * (current_settings["bg_opacity"] / 100.0))
-            alpha = max(0, min(alpha, 255))
-            draw_color = QColor(0, 0, 0, alpha)
-
-            painter.setBrush(QBrush(draw_color))
-            painter.setPen(Qt.NoPen)
-
-            rect = QRect(pos.x() - bg_radius, pos.y() - bg_radius, bg_size, bg_size)
-
-            if current_settings["bg_shape"] == "circle":
-                painter.drawEllipse(rect)
-            elif current_settings["bg_shape"] == "square":
-                painter.drawRect(rect)
-            else:
-                roundness = min(rect.width(), rect.height()) * 0.3
-                painter.drawRoundedRect(rect, roundness, roundness)
-
-        def draw_indicator(self, painter, pos, status, color_int, current_settings, opacity_mult=1.0):
-            if not pos:
-                return
-
-            size = current_settings["size"]
-            if size <= 0:
-                return
-
-            radius = size // 2
-
-            color_hex = int_to_hex(color_int)
-            draw_color = QColor(color_hex)
-            if not draw_color.isValid():
-                draw_color = QColor(255, 0, 255)
-
-            final_alpha = int(255 * status["anim"] * (current_settings["opacity"] / 100.0) * opacity_mult)
-            final_alpha = max(0, min(final_alpha, 255))
-            draw_color.setAlpha(final_alpha)
-
-            painter.setBrush(QBrush(draw_color))
-            painter.setPen(Qt.NoPen)
-
-            rect = QRect(pos.x() - radius, pos.y() - radius, size, size)
-
-            if current_settings["indicator_shape"] == "circle":
-                painter.drawEllipse(rect)
-            elif current_settings["indicator_shape"] == "square":
-                painter.drawRect(rect)
-            else:
-                roundness = min(rect.width(), rect.height()) * 0.3
-                painter.drawRoundedRect(rect, roundness, roundness)
-
-        def draw_pause_icon(self, painter, pos, progress, color_int, current_settings, opacity_mult=1.0):
-            if progress <= 0.001:
-                return
-
-            icon_size = current_settings["size"]
-            if icon_size <= 0:
-                return
-
-            eased_progress = cubic_bezier_ease(progress)
-
-            bar_height = icon_size * 0.8
-            bar_width = icon_size / 4.5
-            bar_spacing = icon_size / 4
-
-            pen_width = max(2, int(icon_size * 0.22))
-            color_hex = int_to_hex(color_int)
-            draw_color = QColor(color_hex)
-            if not draw_color.isValid():
-                return
-
-            base_alpha = rec_status["anim"] * (current_settings["opacity"] / 100.0) * opacity_mult
-            alpha = int(255 * base_alpha)
-            draw_color.setAlpha(max(0, min(alpha, 255)))
-
-            pen = QPen(draw_color, pen_width)
-            pen.setCapStyle(Qt.RoundCap)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-
-            center_x = pos.x()
-            center_y = pos.y()
-
-            left_x = center_x - bar_spacing / 2 - bar_width / 2
-            left_top = QPointF(left_x, center_y - bar_height / 2)
-            left_bottom = QPointF(left_x, center_y + bar_height / 2)
-
-            right_x = center_x + bar_spacing / 2 + bar_width / 2
-            right_top = QPointF(right_x, center_y - bar_height / 2)
-            right_bottom = QPointF(right_x, center_y + bar_height / 2)
-
-            path = QPainterPath()
-
-            animated_left_bottom = left_top + eased_progress * (left_bottom - left_top)
-            path.moveTo(left_top)
-            path.lineTo(animated_left_bottom)
-
-            animated_right_bottom = right_top + eased_progress * (right_bottom - right_top)
-            path.moveTo(right_top)
-            path.lineTo(animated_right_bottom)
-
-            painter.drawPath(path)
-
-        def draw_checkmark(self, painter, pos, progress, color_int, current_settings, opacity_mult=1.0):
-            if progress <= 0.001:
-                return
-
-            eased_progress = cubic_bezier_ease(progress)
-
-            check_size = current_settings["size"]
-
-            pen_width = max(3, int(current_settings["size"] * 0.25))
-
-            color_hex = int_to_hex(color_int)
-            draw_color = QColor(color_hex)
-            if not draw_color.isValid():
-                return
-
-            base_alpha = (current_settings["opacity"] / 100.0) * opacity_mult
-            alpha = int(255 * base_alpha)
-            draw_color.setAlpha(alpha)
-
-            pen = QPen(draw_color, pen_width)
-            pen.setCapStyle(Qt.RoundCap)
-            pen.setJoinStyle(Qt.RoundJoin)
-            painter.setPen(pen)
-
-            points = [
-                QPointF(-0.325 * check_size, 0.0),
-                QPointF(-0.075 * check_size, 0.25 * check_size),
-                QPointF(0.325 * check_size, -0.25 * check_size)
-            ]
-
-            center = QPointF(pos.x(), pos.y())
-            absolute_points = [center + p for p in points]
-
-            path = QPainterPath()
-            path.moveTo(absolute_points[0])
-
-            if eased_progress < 0.5:
-                segment_progress = eased_progress / 0.5
-                end_point = absolute_points[0] + segment_progress * (absolute_points[1] - absolute_points[0])
-                path.lineTo(end_point)
-            else:
-                path.lineTo(absolute_points[1])
-
-                segment_progress = (eased_progress - 0.5) / 0.5
-                end_point = absolute_points[1] + segment_progress * (absolute_points[2] - absolute_points[1])
-                path.lineTo(end_point)
-
-            painter.drawPath(path)
-
-        def update_animations(self):
-            if self.closing:
-                return
+            dim_target = Draw.DIM_OPACITY if self.rec_state.active and self.rec_state.paused else 1.0
+            self.buf_state.dim_effect.set_target(dim_target)
 
             updated = False
-
-            target_anim = 1.0 if rec_status["active"] else 0.0
-            if settings["fade_effect"]:
-                rec_status["anim"] = lerp(rec_status["anim"], target_anim, ANIMATION_SPEED)
-                updated |= abs(rec_status["anim"] - target_anim) > 0.005
-            else:
-                updated |= rec_status["anim"] != target_anim
-                rec_status["anim"] = target_anim
-
-            target_pause_anim = 1.0 if rec_status["paused"] else 0.0
-            if settings["animate_pause"]:
-                if abs(rec_status["pause_anim"] - target_pause_anim) > 0.001:
-                    rec_status["pause_anim"] = lerp(rec_status["pause_anim"], target_pause_anim, ANIMATION_SPEED * 0.5)
-                    updated = True
-                elif rec_status["pause_anim"] != target_pause_anim:
-                    rec_status["pause_anim"] = target_pause_anim
-                    updated = True
-            else:
-                if rec_status["pause_anim"] != target_pause_anim:
-                    rec_status["pause_anim"] = target_pause_anim
-                    updated = True
-
-            target_anim = 1.0 if buf_status["active"] else 0.0
-            if settings["fade_effect"]:
-                buf_status["anim"] = lerp(buf_status["anim"], target_anim, ANIMATION_SPEED)
-                updated |= abs(buf_status["anim"] - target_anim) > 0.005
-            else:
-                updated |= buf_status["anim"] != target_anim
-                buf_status["anim"] = target_anim
-
-            if buf_status["saved_time"] > 0:
-                if time.time() - buf_status["saved_time"] > 1.0:
-                    buf_status["saved"] = False
-
-            target_checkmark_anim = 1.0 if buf_status["saved"] else 0.0
-            if settings["animate_checkmark"]:
-                if abs(buf_status["checkmark_anim"] - target_checkmark_anim) > 0.001:
-                    buf_status["checkmark_anim"] = lerp(buf_status["checkmark_anim"], target_checkmark_anim,
-                                                        ANIMATION_SPEED * 0.5)
-                    updated = True
-                elif buf_status["checkmark_anim"] != target_checkmark_anim:
-                    buf_status["checkmark_anim"] = target_checkmark_anim
-                    updated = True
-            else:
-                if buf_status["checkmark_anim"] != target_checkmark_anim:
-                    buf_status["checkmark_anim"] = target_checkmark_anim
-                    updated = True
-
-            if buf_status["saved_time"] > 0 and not buf_status["saved"] and buf_status["checkmark_anim"] < 0.01:
-                buf_status["saved_time"] = 0.0
-
-            if settings["smooth_position"]:
-                new_x = lerp(buf_status["current_pos"][0], buf_status["target_pos"][0], ANIMATION_SPEED)
-                new_y = lerp(buf_status["current_pos"][1], buf_status["target_pos"][1], ANIMATION_SPEED)
-                buf_status["current_pos"] = (new_x, new_y)
-                updated |= (abs(new_x - buf_status["target_pos"][0]) > 0.5 or
-                            abs(new_y - buf_status["target_pos"][1]) > 0.5)
-
+            updated |= self.rec_state.visibility.update(Animation.SPEED, self.settings["fade_effect"])
+            updated |= self.rec_state.pause_icon.update(Animation.SPEED, self.settings["animate_pause"])
+            updated |= self.buf_state.visibility.update(Animation.SPEED, self.settings["fade_effect"])
+            updated |= self.buf_state.checkmark_icon.update(Animation.SPEED, self.settings["animate_checkmark"])
+            updated |= self.buf_state.dim_effect.update(Animation.SPEED, self.settings["fade_effect"])
+            updated |= self._update_position_animation(self.buf_state)
             if updated:
                 self.update()
 
+        def _update_position_animation(self, state: IndicatorState) -> bool:
+            if not self.settings["smooth_position"]:
+                if state.position != state.target_position:
+                    state.position = state.target_position
+                    return True
+                return False
+
+            if state.target_position.isNull() or state.position == state.target_position:
+                return False
+
+            new_x = lerp(state.position.x(), state.target_position.x(), Animation.SPEED)
+            new_y = lerp(state.position.y(), state.target_position.y(), Animation.SPEED)
+
+            if (abs(new_x - state.target_position.x()) < Animation.POSITION_SNAP_THRESHOLD and
+                    abs(new_y - state.target_position.y()) < Animation.POSITION_SNAP_THRESHOLD):
+                new_pos = state.target_position
+            else:
+                new_pos = QPointF(new_x, new_y)
+
+            if new_pos != state.position:
+                state.position = new_pos
+                return True
+            return False
+
+        def paintEvent(self, event: QPaintEvent) -> None:
+            if self.closing: return
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            self._paint_recording_indicator(painter)
+            self._paint_buffer_indicator(painter)
+
+        def _paint_recording_indicator(self, painter: QPainter) -> None:
+            if self.settings["corner_rec"] == Corner.OFF.value or self.rec_state.visibility.current < Animation.SNAP_THRESHOLD:
+                return
+
+            if not (pos := self._calculate_position(self.settings["corner_rec"])):
+                return
+
+            master_anim = self.rec_state.visibility.current
+            self._draw_background(painter, pos, master_anim)
+
+            pause_progress = self.rec_state.pause_icon.current
+            main_opacity = 1.0 - pause_progress
+
+            if self.rec_state.active and main_opacity > Animation.SNAP_THRESHOLD:
+                self._draw_indicator(painter, pos, master_anim, self.settings["rec_color"], main_opacity)
+
+            if pause_progress > Animation.SNAP_THRESHOLD:
+                self._draw_pause_icon(painter, pos, pause_progress, master_anim, self.settings["rec_pause_color"])
+
+        def _paint_buffer_indicator(self, painter: QPainter) -> None:
+            if self.settings["corner_buf"] == Corner.OFF.value or self.buf_state.visibility.current < Animation.SNAP_THRESHOLD:
+                if not self.buf_state.position.isNull():
+                    self.buf_state.position = QPointF()
+                    self.buf_state.target_position = QPointF()
+                return
+
+            is_shared_corner = (self.rec_state.active and
+                                self.settings["corner_rec"] == self.settings["corner_buf"] and
+                                self.settings["corner_rec"] != Corner.OFF.value)
+            index = 1 if is_shared_corner else 0
+
+            if not (target_pos_qpoint := self._calculate_position(self.settings["corner_buf"], index)):
+                return
+
+            target_pos = QPointF(target_pos_qpoint)
+            self.buf_state.target_position = target_pos
+            if self.buf_state.position.isNull():
+                self.buf_state.position = target_pos
+
+            current_pos = self.buf_state.position.toPoint()
+            master_anim = self.buf_state.visibility.current
+            dim_factor = self.buf_state.dim_effect.current
+
+            self._draw_background(painter, current_pos, master_anim * dim_factor)
+
+            checkmark_progress = self.buf_state.checkmark_icon.current
+            main_opacity = 1.0 - checkmark_progress
+
+            if self.buf_state.active and main_opacity > Animation.SNAP_THRESHOLD:
+                self._draw_indicator(painter, current_pos, master_anim, self.settings["buf_color"],
+                                     main_opacity * dim_factor)
+
+            if checkmark_progress > Animation.SNAP_THRESHOLD:
+                self._draw_checkmark(painter, current_pos, checkmark_progress, master_anim,
+                                     self.settings["buf_saved_color"], dim_factor * checkmark_progress)
+
+        def _draw_shape(self, painter: QPainter, rect: QRect, shape: str, color: QColor, rounded_ratio: float) -> None:
+            if color.alpha() < 1: return
+            painter.setBrush(QBrush(color))
+            painter.setPen(Qt.NoPen)
+
+            if shape == Shape.CIRCLE.value:
+                painter.drawEllipse(rect)
+            elif shape == Shape.SQUARE.value:
+                painter.drawRect(rect)
+            else:
+                radius = min(rect.width(), rect.height()) * rounded_ratio
+                painter.drawRoundedRect(rect, radius, radius)
+
+        def _draw_background(self, painter: QPainter, pos: QPoint, anim_value: float) -> None:
+            bg_size = int(self.settings["size"] * self.settings["bg_size_percent"] / 100)
+            if bg_size <= 0: return
+
+            alpha = int(255 * anim_value * (self.settings["bg_opacity"] / 100.0))
+            color = QColor(0, 0, 0, max(0, min(alpha, 255)))
+            rect = QRect(pos.x() - bg_size // 2, pos.y() - bg_size // 2, bg_size, bg_size)
+
+            self._draw_shape(painter, rect, self.settings["bg_shape"], color, Draw.BG_ROUNDED_RECT_RADIUS_RATIO)
+
+        def _draw_indicator(self, painter: QPainter, pos: QPoint, master_anim: float, rgb_color: int,
+                            opacity_multiplier: float) -> None:
+            size = self.settings["size"]
+            if size <= 0: return
+
+            base_alpha = master_anim * (self.settings["opacity"] / 100.0)
+            final_alpha = int(255 * base_alpha * opacity_multiplier)
+            color = QColor(rgb_color)
+            color.setAlpha(max(0, min(final_alpha, 255)))
+            rect = QRect(pos.x() - size // 2, pos.y() - size // 2, size, size)
+
+            self._draw_shape(painter, rect, self.settings["indicator_shape"], color,
+                             Draw.INDICATOR_ROUNDED_RECT_RADIUS_RATIO)
+
+        def _draw_pause_icon(self, painter: QPainter, pos: QPoint, icon_progress: float, master_anim: float,
+                             rgb_color: int) -> None:
+            size = self.settings["size"]
+            if size <= 0: return
+
+            eased_progress = cubic_bezier_ease(icon_progress)
+            base_alpha = master_anim * (self.settings["opacity"] / 100.0)
+            final_alpha = int(255 * base_alpha)
+            color = QColor(rgb_color)
+            color.setAlpha(max(0, min(final_alpha, 255)))
+            if color.alpha() < 1: return
+
+            pen_width = max(2, int(size * Draw.PAUSE_PEN_WIDTH_RATIO))
+            bar_height = size * Draw.PAUSE_BAR_HEIGHT_RATIO
+            bar_spacing = size * Draw.PAUSE_BAR_SPACING_RATIO
+
+            pen = QPen(color, pen_width, cap=Qt.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+
+            center_x, center_y = pos.x(), pos.y()
+            left_x, right_x = center_x - bar_spacing / 2, center_x + bar_spacing / 2
+            animated_half_height = (bar_height * eased_progress) / 2
+
+            path = QPainterPath()
+            path.moveTo(left_x, center_y - animated_half_height)
+            path.lineTo(left_x, center_y + animated_half_height)
+            path.moveTo(right_x, center_y - animated_half_height)
+            path.lineTo(right_x, center_y + animated_half_height)
+            painter.drawPath(path)
+
+        def _draw_checkmark(self, painter: QPainter, pos: QPoint, icon_progress: float, master_anim: float,
+                            rgb_color: int, opacity_multiplier: float) -> None:
+            size = self.settings["size"]
+            eased_progress = cubic_bezier_ease(icon_progress)
+
+            base_alpha = master_anim * (self.settings["opacity"] / 100.0)
+            final_alpha = int(255 * base_alpha * opacity_multiplier)
+            color = QColor(rgb_color)
+            color.setAlpha(max(0, min(final_alpha, 255)))
+            if color.alpha() < 1: return
+
+            painter.save()
+            pen_width = max(2, int(size * Draw.CHECKMARK_PEN_WIDTH_RATIO))
+            pen = QPen(color, pen_width, cap=Qt.RoundCap, join=Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.translate(pos)
+
+            p1, p2, p3 = (p * size for p in (Draw.CHECKMARK_P1, Draw.CHECKMARK_P2, Draw.CHECKMARK_P3))
+
+            path = QPainterPath()
+            path.moveTo(p1)
+
+            if self.buf_state.checkmark_icon.target == 1.0:
+                split = Draw.CHECKMARK_ANIM_SPLIT
+                if eased_progress < split:
+                    t = eased_progress / split
+                    path.lineTo(p1 + t * (p2 - p1))
+                else:
+                    path.lineTo(p2)
+                    t = (eased_progress - split) / (1.0 - split)
+                    path.lineTo(p2 + t * (p3 - p2))
+            else:
+                path.lineTo(p2)
+                path.lineTo(p3)
+
+            painter.drawPath(path)
+            painter.restore()
 
     class OverlayApp:
-        def __init__(self):
-            self.app = None
-            self.overlay = None
+        def __init__(self, initial_settings: Dict[str, Any]):
+            self.app: Optional[QApplication] = None
+            self.overlay: Optional[OverlayWindow] = None
             self.emitter = SignalEmitter()
+            self.initial_settings = initial_settings
 
-        def run(self):
-            self.app = QApplication.instance()
-            if not self.app:
-                self.app = QApplication(sys.argv)
-
+        def run(self) -> None:
+            self.app = QApplication.instance() or QApplication([])
             self.app.setQuitOnLastWindowClosed(True)
-
-            self.overlay = OverlayWindow(self.emitter)
+            self.overlay = OverlayWindow(self.emitter, self.initial_settings)
             self.overlay.show()
             self.app.exec_()
 
-        def stop(self):
+        def stop(self) -> None:
             if self.overlay:
                 QMetaObject.invokeMethod(self.overlay, "close", Qt.QueuedConnection)
 
+def event_handler(event: int) -> None:
+    if not HAS_PYSIDE or not overlay_app or not overlay_app.emitter: return
 
-def event_handler(event):
-    if not HAS_PYSIDE or overlay_app is None:
-        return
+    event_map = {
+        obs.OBS_FRONTEND_EVENT_RECORDING_STARTING: lambda: overlay_app.emitter.rec_status_changed.emit(True, False),
+        obs.OBS_FRONTEND_EVENT_RECORDING_STOPPED: lambda: overlay_app.emitter.rec_status_changed.emit(False, False),
+        obs.OBS_FRONTEND_EVENT_RECORDING_PAUSED: lambda: overlay_app.emitter.rec_status_changed.emit(True, True),
+        obs.OBS_FRONTEND_EVENT_RECORDING_UNPAUSED: lambda: overlay_app.emitter.rec_status_changed.emit(True, False),
+        obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTED: lambda: overlay_app.emitter.buf_status_changed.emit(True, False),
+        obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_STOPPED: lambda: overlay_app.emitter.buf_status_changed.emit(False, False),
+        obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED: lambda: overlay_app.emitter.buf_status_changed.emit(True, True),
+    }
 
-    if event == obs.OBS_FRONTEND_EVENT_RECORDING_STARTING:
-        overlay_app.emitter.rec_status_changed.emit(True, False)
-    elif event == obs.OBS_FRONTEND_EVENT_RECORDING_STOPPED:
-        overlay_app.emitter.rec_status_changed.emit(False, False)
-    elif event == obs.OBS_FRONTEND_EVENT_RECORDING_PAUSED:
-        overlay_app.emitter.rec_status_changed.emit(True, True)
-    elif event == obs.OBS_FRONTEND_EVENT_RECORDING_UNPAUSED:
-        overlay_app.emitter.rec_status_changed.emit(True, False)
-    elif event == obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTED:
-        overlay_app.emitter.buf_status_changed.emit(True, False)
-    elif event == obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED:
-        overlay_app.emitter.buf_status_changed.emit(obs.obs_frontend_replay_buffer_active(), True)
-    elif event == obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_STOPPED:
-        overlay_app.emitter.buf_status_changed.emit(False, False)
+    if action := event_map.get(event):
+        action()
 
-
-def script_description():
+def script_description() -> str:
     return STRINGS["description"]
 
+def _add_list_options(prop_list: Any, options: List[Tuple[str, str]]) -> None:
+    for label, value in options:
+        obs.obs_property_list_add_string(prop_list, label, value)
 
-def script_properties():
+def script_properties() -> Any:
     props = obs.obs_properties_create()
 
-    grp = obs.obs_properties_create()
-    obs.obs_properties_add_group(props, "appearance", "Appearance", obs.OBS_GROUP_NORMAL, grp)
-    obs.obs_properties_add_int(grp, "size", STRINGS["size"], 5, 100, 1)
-    obs.obs_properties_add_int(grp, "margin", STRINGS["margin"], 0, 100, 1)
-    obs.obs_properties_add_int_slider(grp, "opacity", STRINGS["opacity"], 1, 100, 1)
+    def add_group(parent: Any, id_str: str, title: str) -> Any:
+        grp = obs.obs_properties_create()
+        obs.obs_properties_add_group(parent, id_str, title, obs.OBS_GROUP_NORMAL, grp)
+        return grp
 
-    shape_list = obs.obs_properties_add_list(grp, "indicator_shape", STRINGS["indicator_shape"],
-                                             obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
-    for label, value in STRINGS["shape_opts"]:
-        obs.obs_property_list_add_string(shape_list, label, value)
+    app_grp = add_group(props, "appearance", "Appearance")
+    obs.obs_properties_add_int(app_grp, "size", STRINGS["size"], 5, 100, 1)
+    obs.obs_properties_add_int(app_grp, "margin", STRINGS["margin"], 0, 100, 1)
+    obs.obs_properties_add_int_slider(app_grp, "opacity", STRINGS["opacity"], 1, 100, 1)
+    shape_list = obs.obs_properties_add_list(app_grp, "indicator_shape", STRINGS["indicator_shape"], obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
+    _add_list_options(shape_list, STRINGS["shape_opts"])
+    bg_shape_list = obs.obs_properties_add_list(app_grp, "bg_shape", STRINGS["bg_shape"], obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
+    _add_list_options(bg_shape_list, STRINGS["shape_opts"])
+    obs.obs_properties_add_int_slider(app_grp, "bg_opacity", STRINGS["bg_opacity"], 0, 100, 1)
+    obs.obs_properties_add_int_slider(app_grp, "bg_size_percent", STRINGS["bg_size_percent"], 100, 500, 5)
 
-    bg_shape_list = obs.obs_properties_add_list(grp, "bg_shape", STRINGS["bg_shape"],
-                                                obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
-    for label, value in STRINGS["shape_opts"]:
-        obs.obs_property_list_add_string(bg_shape_list, label, value)
+    rec_grp = add_group(props, "recording", "Recording Indicator")
+    corner_list_rec = obs.obs_properties_add_list(rec_grp, "corner_rec", "Position", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
+    _add_list_options(corner_list_rec, STRINGS["corner_opts"])
+    obs.obs_properties_add_color(rec_grp, "rec_color", STRINGS["rec_color"])
+    obs.obs_properties_add_color(rec_grp, "rec_pause_color", STRINGS["rec_pause_color"])
 
-    obs.obs_properties_add_int_slider(grp, "bg_opacity", STRINGS["bg_opacity"], 0, 100, 1)
-    obs.obs_properties_add_int_slider(grp, "bg_size_percent", STRINGS["bg_size_percent"], 100, 300, 5)
+    buf_grp = add_group(props, "buffer", "Replay Buffer Indicator")
+    corner_list_buf = obs.obs_properties_add_list(buf_grp, "corner_buf", "Position", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
+    _add_list_options(corner_list_buf, STRINGS["corner_opts"])
+    obs.obs_properties_add_color(buf_grp, "buf_color", STRINGS["buf_color"])
+    obs.obs_properties_add_color(buf_grp, "buf_saved_color", STRINGS["buf_saved_color"])
+    obs.obs_properties_add_float_slider(buf_grp, "checkmark_duration", STRINGS["checkmark_duration"], 0.5, 5.0, 0.1)
 
-    grp = obs.obs_properties_create()
-    obs.obs_properties_add_group(props, "recording", "Recording Indicator", obs.OBS_GROUP_NORMAL, grp)
-
-    corner_list = obs.obs_properties_add_list(grp, "corner_rec", "Position",
-                                              obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
-    for label, value in STRINGS["corner_opts"]:
-        obs.obs_property_list_add_string(corner_list, label, value)
-
-    obs.obs_properties_add_color(grp, "rec_color", STRINGS["rec_color"])
-    obs.obs_properties_add_color(grp, "rec_pause_color", STRINGS["rec_pause_color"])
-
-    grp = obs.obs_properties_create()
-    obs.obs_properties_add_group(props, "buffer", "Replay Buffer Indicator", obs.OBS_GROUP_NORMAL, grp)
-
-    corner_list = obs.obs_properties_add_list(grp, "corner_buf", "Position",
-                                              obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
-    for label, value in STRINGS["corner_opts"]:
-        obs.obs_property_list_add_string(corner_list, label, value)
-
-    obs.obs_properties_add_color(grp, "buf_color", STRINGS["buf_color"])
-    obs.obs_properties_add_color(grp, "buf_saved_color", STRINGS["buf_saved_color"])
-
-    grp = obs.obs_properties_create()
-    obs.obs_properties_add_group(props, "effects", "Effects", obs.OBS_GROUP_NORMAL, grp)
-    obs.obs_properties_add_bool(grp, "fade_effect", STRINGS["fade_effect"])
-    obs.obs_properties_add_bool(grp, "smooth_position", STRINGS["smooth_position"])
-    obs.obs_properties_add_bool(grp, "animate_pause", STRINGS["animate_pause"])
-    obs.obs_properties_add_bool(grp, "animate_checkmark", STRINGS["animate_checkmark"])
+    fx_grp = add_group(props, "effects", "Effects")
+    obs.obs_properties_add_bool(fx_grp, "fade_effect", STRINGS["fade_effect"])
+    obs.obs_properties_add_bool(fx_grp, "smooth_position", STRINGS["smooth_position"])
+    obs.obs_properties_add_bool(fx_grp, "animate_pause", STRINGS["animate_pause"])
+    obs.obs_properties_add_bool(fx_grp, "animate_checkmark", STRINGS["animate_checkmark"])
 
     return props
 
-
-def script_defaults(settings_obj):
+def script_defaults(settings_obj: Any) -> None:
+    setter_map = {
+        bool: obs.obs_data_set_default_bool,
+        float: obs.obs_data_set_default_double,
+        int: obs.obs_data_set_default_int,
+        str: obs.obs_data_set_default_string,
+    }
     for key, value in DEFAULT_SETTINGS.items():
         if key.endswith("_color"):
-            rr = (value >> 16) & 0xFF
-            gg = (value >> 8) & 0xFF
-            bb = value & 0xFF
-            obs_color = (0xFF << 24) | (bb << 16) | (gg << 8) | rr
-            obs.obs_data_set_int(settings_obj, key, obs_color)
-        elif isinstance(value, bool):
-            obs.obs_data_set_bool(settings_obj, key, value)
-        elif isinstance(value, int):
-            obs.obs_data_set_int(settings_obj, key, value)
-        elif isinstance(value, str):
-            obs.obs_data_set_string(settings_obj, key, value)
+            obs.obs_data_set_default_int(settings_obj, key, rgb_to_obs_color(value))
+        elif setter_func := setter_map.get(type(value)):
+            setter_func(settings_obj, key, value)
 
+def get_settings_from_obs(settings_obj: Any) -> Dict[str, Any]:
+    s = {}
+    getter_map = {
+        bool: obs.obs_data_get_bool,
+        float: obs.obs_data_get_double,
+        int: obs.obs_data_get_int,
+        str: obs.obs_data_get_string,
+    }
+    for key, value in DEFAULT_SETTINGS.items():
+        if key.endswith("_color"):
+            s[key] = obs_color_to_rgb(obs.obs_data_get_int(settings_obj, key))
+        elif getter_func := getter_map.get(type(value)):
+            s[key] = getter_func(settings_obj, key)
+    return s
 
-def script_update(settings_obj):
-    settings["corner_rec"] = obs.obs_data_get_string(settings_obj, "corner_rec") or DEFAULT_SETTINGS["corner_rec"]
-    settings["corner_buf"] = obs.obs_data_get_string(settings_obj, "corner_buf") or DEFAULT_SETTINGS["corner_buf"]
-    settings["size"] = obs.obs_data_get_int(settings_obj, "size") or DEFAULT_SETTINGS["size"]
-    settings["margin"] = obs.obs_data_get_int(settings_obj, "margin") or DEFAULT_SETTINGS["margin"]
-    settings["opacity"] = obs.obs_data_get_int(settings_obj, "opacity") or DEFAULT_SETTINGS["opacity"]
-    settings["bg_opacity"] = obs.obs_data_get_int(settings_obj, "bg_opacity") or DEFAULT_SETTINGS["bg_opacity"]
-    settings["bg_size_percent"] = obs.obs_data_get_int(settings_obj, "bg_size_percent") or DEFAULT_SETTINGS[
-        "bg_size_percent"]
-    settings["indicator_shape"] = obs.obs_data_get_string(settings_obj, "indicator_shape") or DEFAULT_SETTINGS[
-        "indicator_shape"]
-    settings["bg_shape"] = obs.obs_data_get_string(settings_obj, "bg_shape") or DEFAULT_SETTINGS["bg_shape"]
-    settings["fade_effect"] = obs.obs_data_get_bool(settings_obj, "fade_effect")
-    settings["smooth_position"] = obs.obs_data_get_bool(settings_obj, "smooth_position")
-    settings["animate_pause"] = obs.obs_data_get_bool(settings_obj, "animate_pause")
-    settings["animate_checkmark"] = obs.obs_data_get_bool(settings_obj, "animate_checkmark")
+def script_update(settings_obj: Any) -> None:
+    if HAS_PYSIDE and overlay_app and overlay_app.emitter:
+        current_settings = get_settings_from_obs(settings_obj)
+        overlay_app.emitter.settings_updated.emit(current_settings)
 
-    color_keys = ["rec_color", "rec_pause_color", "buf_color", "buf_saved_color"]
-    for key in color_keys:
-        obs_color = obs.obs_data_get_int(settings_obj, key)
-        settings[key] = obs_color_to_rgb(obs_color) if obs_color != 0 else DEFAULT_SETTINGS[key]
-
-    if HAS_PYSIDE and overlay_app is not None:
-        overlay_app.emitter.settings_updated.emit()
-
-
-def script_load(settings_obj):
+def script_load(settings_obj: Any) -> None:
     global overlay_app, gui_thread
+    if not HAS_PYSIDE:
+        return
 
-    script_update(settings_obj)
-
+    initial_settings = get_settings_from_obs(settings_obj)
     obs.obs_frontend_add_event_callback(event_handler)
 
-    if HAS_PYSIDE:
-        overlay_app = OverlayApp()
+    overlay_app = OverlayApp(initial_settings)
+    gui_thread = threading.Thread(target=overlay_app.run, daemon=True)
+    gui_thread.start()
 
-        def run_gui():
-            overlay_app.run()
+    obs.timer_add(_send_initial_state, Timeouts.INITIAL_STATE_DELAY_MS)
 
-        gui_thread = threading.Thread(target=run_gui, daemon=True)
-        gui_thread.start()
-
-        time.sleep(0.2)
+def _send_initial_state() -> None:
+    if overlay_app and overlay_app.emitter:
         rec_active = obs.obs_frontend_recording_active()
         rec_paused = obs.obs_frontend_recording_paused() if rec_active else False
         buf_active = obs.obs_frontend_replay_buffer_active()
-
         overlay_app.emitter.rec_status_changed.emit(rec_active, rec_paused)
         overlay_app.emitter.buf_status_changed.emit(buf_active, False)
 
-
-def script_unload():
+def script_unload() -> None:
     global overlay_app, gui_thread
-
     obs.obs_frontend_remove_event_callback(event_handler)
-
-    if HAS_PYSIDE and overlay_app is not None:
+    if HAS_PYSIDE and overlay_app:
         overlay_app.stop()
-        if gui_thread is not None:
-            gui_thread.join(THREAD_JOIN_TIMEOUT)
+        if gui_thread:
+            gui_thread.join(Timeouts.THREAD_JOIN)
         overlay_app = None
         gui_thread = None
+    log.info("OBS Indicator script unloaded.")

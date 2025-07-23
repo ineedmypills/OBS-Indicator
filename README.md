@@ -33,7 +33,7 @@ Just follow these 3 steps to get up and running.
 
 ### Step 2: Install Python for OBS
 
-1.  **Download the dedicated Python build:** Head over to the [OBS-Python repository](https://github.com/ineedmypills/OBS-Python).
+1.  **Download the dedicated Python build:** Head over to the [**OBS-Python repository**](https://github.com/ineedmypills/OBS-Python).
 2.  Follow the installation instructions provided on that page. This build includes all necessary dependencies.
 
 ### Step 3: Add the Script to OBS

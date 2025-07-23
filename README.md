@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/OBS Studio-28+-brightgreen?logo=obs-studio" alt="OBS Version">
-  <img src="https://img.shields.io/badge/Python-3.6+-blue?logo=python" alt="Python Version">
+  <img src="https://img.shields.io/badge/Python-3.9+-blue?logo=python" alt="Python Version">
 </p>
 
 ## ❤️ Key Features

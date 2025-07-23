@@ -31,19 +31,10 @@ Just follow these 3 steps to get up and running.
 1.  Go to the [**Releases Page**](https://github.com/ineedmypills/OBS-Indicator/releases).
 2.  Download the latest version of the `OBSIndicator.py` file.
 
-### Step 2: Install the Dependency (PySide2)
+### Step 2: Install Python for OBS
 
-The script uses the `PySide2` library to display the icons.
-
-1. Open OBS Studio.
-2. Go to **Tools → Scripts**.
-3. Click the **Python Settings** tab and make sure your Python Install Path is set. If it's empty, you may need to install Python from [this repo for example](https://github.com/zooba/obs-python) and point OBS to it.
-4. Open **Command Prompt (CMD)** or **PowerShell as an Administrator**.
-5. Navigate to your OBS Python folder
-6. Install PySide2 using pip:
-    ```bash
-    {path to python.exe} -m pip install PySide2
-    ```
+1.  **Download the dedicated Python build:** Head over to the [OBS-Python repository](https://github.com/ineedmypills/OBS-Python).
+2.  Follow the installation instructions provided on that page. This build includes all necessary dependencies.
 
 ### Step 3: Add the Script to OBS
 

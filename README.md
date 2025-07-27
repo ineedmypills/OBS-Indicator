@@ -12,16 +12,16 @@
 ## ❤️ Key Features
 
 - **Feels like ShadowPlay**: Familiar, intuitive icons for recording and replay saving.
-- **Always on Top**: Stays visible over your games ~~and full-screen applications~~.
+- **Always on Top**: Stays visible over your games.
 - **Simple Setup**: A clear, step-by-step guide to get you started in minutes.
 - **Lightweight**: Minimal system impact. It won't slow down your stream or recording.
 - **Fully Customizable**: Adjust the position, style, and opacity to match your preference.
 > [!WARNING]  
-> This script **CANNOT** display indicators in **exclusive full-screen applications**, *but this may be fixed in the future*...
+> The functionality to display over **exclusive full-screen** applications is not implemented **and will not be implemented**. It requires deep knowledge in DirectX hooking, as well as certifcation (so that anti-cheat systems do not perceive indicators as cheats).
 > 
-> It is *almost* impossible to implement this feature in a simple Python script....
+> Indicators can be added to OBS **officially**  if you [**vote here**](https://ideas.obsproject.com/posts/2454/obs-visual-rec-pause-stop-indicator).
 > 
-> Use **windowed full-screen mode**!
+> Use **windowed full-screen mode**.
 ## ⚙️ Installation & Setup
 
 Just follow these 3 steps to get up and running.

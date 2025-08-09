@@ -6,22 +6,22 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/OBS Studio-28+-brightgreen?logo=obs-studio" alt="OBS Version">
-  <img src="https://img.shields.io/badge/Python-3.6+-blue?logo=python" alt="Python Version">
+  <img src="https://img.shields.io/badge/Python-3.9+-blue?logo=python" alt="Python Version">
 </p>
 
 ## ❤️ Key Features
 
 - **Feels like ShadowPlay**: Familiar, intuitive icons for recording and replay saving.
-- **Always on Top**: Stays visible over your games ~~and full-screen applications~~.
+- **Always on Top**: Stays visible over your games.
 - **Simple Setup**: A clear, step-by-step guide to get you started in minutes.
 - **Lightweight**: Minimal system impact. It won't slow down your stream or recording.
 - **Fully Customizable**: Adjust the position, style, and opacity to match your preference.
 > [!WARNING]  
-> This script **CANNOT** display indicators in **exclusive full-screen applications**, *but this may be fixed in the future*...
+> The functionality to display over **exclusive full-screen** applications is not implemented **and will not be implemented**. It requires deep knowledge in DirectX hooking, as well as certifcation (so that anti-cheat systems do not perceive indicators as cheats).
 > 
-> It is *almost* impossible to implement this feature in a simple Python script....
+> Indicators can be added to OBS **officially**  if you [**vote here**](https://ideas.obsproject.com/posts/2454/obs-visual-rec-pause-stop-indicator).
 > 
-> Use **windowed full-screen mode**!
+> Use **windowed full-screen mode**.
 ## ⚙️ Installation & Setup
 
 Just follow these 3 steps to get up and running.
@@ -31,19 +31,10 @@ Just follow these 3 steps to get up and running.
 1.  Go to the [**Releases Page**](https://github.com/ineedmypills/OBS-Indicator/releases).
 2.  Download the latest version of the `OBSIndicator.py` file.
 
-### Step 2: Install the Dependency (PySide2)
+### Step 2: Install Python for OBS
 
-The script uses the `PySide2` library to display the icons.
-
-1. Open OBS Studio.
-2. Go to **Tools → Scripts**.
-3. Click the **Python Settings** tab and make sure your Python Install Path is set. If it's empty, you may need to install Python from [this repo for example](https://github.com/zooba/obs-python) and point OBS to it.
-4. Open **Command Prompt (CMD)** or **PowerShell as an Administrator**.
-5. Navigate to your OBS Python folder
-6. Install PySide2 using pip:
-    ```bash
-    {path to python.exe} -m pip install PySide2
-    ```
+1.  **Download the dedicated Python build:** Head over to the [**OBS-Python repository**](https://github.com/ineedmypills/OBS-Python).
+2.  Follow the installation instructions provided on that page. This build includes all necessary dependencies.
 
 ### Step 3: Add the Script to OBS
 

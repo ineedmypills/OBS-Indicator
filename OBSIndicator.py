@@ -14,12 +14,19 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
 HAS_PYSIDE = False
+HAS_QTSOUND = False
 try:
     from PySide2.QtWidgets import QApplication, QWidget
     from PySide2.QtCore import (Qt, QTimer, QPoint, QRect, QObject, Signal,
-                                QPointF, QRectF, QMetaObject)
+                                QPointF, QRectF, QMetaObject, QUrl)
     from PySide2.QtGui import (QPainter, QColor, QBrush, QPen, QPainterPath,
                                QGuiApplication, QPaintEvent)
+
+    try:
+        from PySide2.QtMultimedia import QSoundEffect
+        HAS_QTSOUND = True
+    except ImportError:
+        log.warning("PySide2.QtMultimedia not found. Sound effects will not be played.")
 
     HAS_PYSIDE = True
 except ImportError:
@@ -82,6 +89,14 @@ DEFAULT_SETTINGS = {
     "fade_effect": True, "smooth_position": True,
     "animate_pause": True, "animate_checkmark": True,
     "checkmark_duration": 1.5,
+    "flash_on_save": False, "flash_color": 0xFFFFFF, "flash_duration": 0.2,
+    "rec_border_enabled": False, "rec_pause_border_enabled": True,
+    "rec_border_color": 0xFF5555, "rec_pause_border_color": 0xFFAA00,
+    "buf_border_enabled": False, "buf_save_border_enabled": True,
+    "buf_border_color": 0x55FF55, "buf_save_border_color": 0x5555FF,
+    "border_width": 5,
+    "save_sound_path": "Saved.wav",
+    "save_sound_volume": 100,
 }
 
 STRINGS = {
@@ -94,6 +109,19 @@ STRINGS = {
     "fade_effect": "Fade Effect", "smooth_position": "Smooth Movement",
     "animate_pause": "Animate Pause Icon", "animate_checkmark": "Animate Checkmark Icon",
     "checkmark_duration": "Checkmark Duration (s)",
+    "flash_on_save": "Flash on Save", "flash_color": "Flash Color", "flash_duration": "Flash Duration (s)",
+    "borders_group": "Borders",
+    "rec_border_enabled": "Enable Recording Border",
+    "rec_pause_border_enabled": "Enable Pause Border (if main is off)",
+    "rec_border_color": "Border Color (Active)",
+    "rec_pause_border_color": "Border Color (Paused)",
+    "buf_border_enabled": "Enable Replay Buffer Border",
+    "buf_save_border_enabled": "Enable Save Border (if main is off)",
+    "buf_border_color": "Border Color (Active)",
+    "buf_save_border_color": "Border Color (Saved)",
+    "border_width": "Border Width (px)",
+    "save_sound_path": "Save Sound Path",
+    "save_sound_volume": "Save Sound Volume (%)",
     "shape_opts": [("Circle", Shape.CIRCLE.value), ("Square", Shape.SQUARE.value), ("Rounded", Shape.ROUNDED.value)],
     "corner_opts": [
         ("Top Left", Corner.TOP_LEFT.value), ("Top Right", Corner.TOP_RIGHT.value),
@@ -121,6 +149,11 @@ def ease_in_out_cubic(t: float) -> float:
         return 0.5 * t * t * t
     t -= 2
     return 0.5 * (t * t * t + 2)
+
+
+def ease_out_cubic(t: float) -> float:
+    t -= 1.0
+    return t * t * t + 1.0
 
 
 if HAS_PYSIDE:
@@ -158,6 +191,7 @@ if HAS_PYSIDE:
         name: str = "rec"
         paused: bool = False
         pause_icon: AnimatedValue = field(default_factory=AnimatedValue)
+        border_width: AnimatedValue = field(default_factory=AnimatedValue)
 
 
     @dataclass
@@ -167,6 +201,11 @@ if HAS_PYSIDE:
         saved_time: float = 0.0
         checkmark_icon: AnimatedValue = field(default_factory=AnimatedValue)
         dim_effect: AnimatedValue = field(default_factory=lambda: AnimatedValue(current=1.0, target=1.0))
+        flash_effect: AnimatedValue = field(default_factory=AnimatedValue)
+        flash_start_time: float = 0.0
+        border_width: AnimatedValue = field(default_factory=AnimatedValue)
+        save_border_width: AnimatedValue = field(default_factory=AnimatedValue)
+
 
 if HAS_PYSIDE:
     class SignalEmitter(QObject):
@@ -186,10 +225,12 @@ if HAS_PYSIDE:
 
             self.rec_state = RecordingState()
             self.buf_state = BufferState()
+            self.save_sound: Optional[QSoundEffect] = None
 
             self._init_ui()
             self._setup_signals()
             self._setup_timers()
+            self._setup_sound()
 
         def _init_ui(self) -> None:
             self.setWindowTitle("OBS Status Overlay")
@@ -223,6 +264,31 @@ if HAS_PYSIDE:
             self.geometry_timer.timeout.connect(self._update_geometry)
             self.geometry_timer.start(Timeouts.SCREEN_GEOMETRY_CHECK_MS)
 
+        def _setup_sound(self) -> None:
+            if not HAS_QTSOUND: return
+            self.save_sound = QSoundEffect(self)
+            self._update_sound()
+
+        def _update_sound(self) -> None:
+            if not self.save_sound: return
+            path = self.settings.get("save_sound_path", "")
+            volume = self.settings.get("save_sound_volume", 100) / 100.0
+            
+            if path and not os.path.isabs(path):
+                try:
+                    # obs.script_path() is the intended way, but __file__ is a reliable fallback
+                    script_dir = os.path.dirname(obs.script_path() or __file__)
+                    path = os.path.join(script_dir, path)
+                except (NameError, AttributeError):
+                    # Fallback if both fail
+                    pass
+
+            if path and os.path.exists(path):
+                self.save_sound.setSource(QUrl.fromLocalFile(path))
+                self.save_sound.setVolume(volume)
+            else:
+                self.save_sound.setSource(QUrl())
+
         def closeEvent(self, event: QPaintEvent) -> None:
             self.closing = True
             self.animation_timer.stop()
@@ -241,6 +307,11 @@ if HAS_PYSIDE:
                 self.buf_state.active = True
                 self.buf_state.saved = True
                 self.buf_state.saved_time = time.monotonic()
+                if self.settings["flash_on_save"]:
+                    self.buf_state.flash_start_time = time.monotonic()
+                    self.buf_state.flash_effect.set_target(1.0)
+                if self.save_sound and self.save_sound.isLoaded():
+                    self.save_sound.play()
             else:
                 self.buf_state.active = active
 
@@ -249,6 +320,7 @@ if HAS_PYSIDE:
             self.settings = new_settings
             self.positions_cache.clear()
             self._update_geometry()
+            self._update_sound()
             self.update()
 
         def _update_geometry(self) -> None:
@@ -296,8 +368,7 @@ if HAS_PYSIDE:
             self.rec_state.visibility.set_target(self.rec_state.active)
             self.rec_state.pause_icon.set_target(self.rec_state.paused)
 
-            if self.buf_state.saved and time.monotonic() - self.buf_state.saved_time > self.settings[
-                "checkmark_duration"]:
+            if self.buf_state.saved and time.monotonic() - self.buf_state.saved_time > self.settings["checkmark_duration"]:
                 self.buf_state.saved = False
                 self.buf_state.saved_time = 0.0
 
@@ -306,6 +377,31 @@ if HAS_PYSIDE:
 
             dim_target = Draw.DIM_OPACITY if self.rec_state.active and self.rec_state.paused else 1.0
             self.buf_state.dim_effect.set_target(dim_target)
+
+            if self.buf_state.flash_start_time > 0:
+                if time.monotonic() - self.buf_state.flash_start_time > self.settings["flash_duration"]:
+                    self.buf_state.flash_effect.set_target(0.0)
+                    if self.buf_state.flash_effect.current < Animation.SNAP_THRESHOLD:
+                        self.buf_state.flash_start_time = 0.0
+
+            # Border logic
+            rec_border_on = self.settings["rec_border_enabled"] and self.rec_state.active
+            buf_border_on = self.settings["buf_border_enabled"] and self.buf_state.active
+
+            pause_border_on = (not self.settings["rec_border_enabled"] and
+                               self.settings["rec_pause_border_enabled"] and
+                               self.rec_state.active and self.rec_state.paused)
+
+            save_border_on = (not self.settings["buf_border_enabled"] and
+                              self.settings["buf_save_border_enabled"] and
+                              self.buf_state.saved)
+
+            target_rec_border_width = self.settings["border_width"] if rec_border_on or pause_border_on else 0
+            self.rec_state.border_width.set_target(target_rec_border_width)
+
+            self.buf_state.border_width.set_target(self.settings["border_width"] if buf_border_on else 0)
+            self.buf_state.save_border_width.set_target(self.settings["border_width"] if save_border_on else 0)
+
 
             # Update positions
             self._update_indicator_position(self.rec_state)
@@ -320,12 +416,16 @@ if HAS_PYSIDE:
             updated |= self.rec_state.pause_icon.update(Animation.SPEED, self.settings["animate_pause"])
             updated |= self.buf_state.checkmark_icon.update(Animation.SPEED, self.settings["animate_checkmark"])
             updated |= self.buf_state.dim_effect.update(Animation.SPEED, self.settings["fade_effect"])
+            flash_speed_multiplier = 4.0 if self.buf_state.flash_effect.target == 1.0 else 1.0
+            updated |= self.buf_state.flash_effect.update(Animation.SPEED * flash_speed_multiplier, True)
+            updated |= self.rec_state.border_width.update(Animation.SPEED, True)
+            updated |= self.buf_state.border_width.update(Animation.SPEED, True)
+            updated |= self.buf_state.save_border_width.update(Animation.SPEED, True)
 
             if updated:
                 self.update()
 
         def _update_indicator_position(self, state: IndicatorState) -> None:
-            """Calculates and sets the target position for an indicator."""
             corner_setting = self.settings[f"corner_{state.name}"]
             if corner_setting == Corner.OFF.value:
                 state.target_position = QPointF()
@@ -371,11 +471,56 @@ if HAS_PYSIDE:
             if self.closing: return
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
+            self._paint_borders(painter)
+            self._paint_flash(painter)
             self._paint_indicator(painter, self.rec_state)
             self._paint_indicator(painter, self.buf_state)
 
+        def _paint_flash(self, painter: QPainter) -> None:
+            if self.buf_state.flash_effect.current < Animation.SNAP_THRESHOLD:
+                return
+            alpha = self.buf_state.flash_effect.current
+            if self.buf_state.flash_effect.target == 0.0:
+                alpha = ease_out_cubic(alpha)
+            color = QColor(self.settings["flash_color"])
+            color.setAlphaF(alpha)
+            painter.fillRect(self.rect(), color)
+
+        def _paint_borders(self, painter: QPainter) -> None:
+            painter.save()
+            # Regular recording border
+            if self.rec_state.border_width.current > Animation.SNAP_THRESHOLD:
+                width = self.rec_state.border_width.current
+                color_key = "rec_pause_border_color" if self.rec_state.paused else "rec_border_color"
+                color = QColor(self.settings[color_key])
+                self._draw_border(painter, width, color)
+
+            # Regular buffer border
+            if self.buf_state.border_width.current > Animation.SNAP_THRESHOLD:
+                width = self.buf_state.border_width.current
+                color_key = "buf_save_border_color" if self.buf_state.saved else "buf_border_color"
+                color = QColor(self.settings[color_key])
+                self._draw_border(painter, width, color)
+
+            # Special save border
+            if self.buf_state.save_border_width.current > Animation.SNAP_THRESHOLD:
+                width = self.buf_state.save_border_width.current
+                color = QColor(self.settings["buf_save_border_color"])
+                self._draw_border(painter, width, color)
+            painter.restore()
+
+        def _draw_border(self, painter: QPainter, width: float, color: QColor) -> None:
+            if width < 1 or color.alphaF() == 0.0:
+                return
+            pen = QPen(color)
+            pen.setWidthF(width)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            inset = width / 2
+            rect = self.rect().adjusted(inset, inset, -inset, -inset)
+            painter.drawRect(rect)
+
         def _paint_indicator(self, painter: QPainter, state: IndicatorState) -> None:
-            """Generic method to draw an indicator based on its state."""
             if state.visibility.current < Animation.SNAP_THRESHOLD:
                 return
 
@@ -448,7 +593,7 @@ if HAS_PYSIDE:
 
             eased_progress = ease_in_out_cubic(icon_progress)
             base_alpha = master_anim * (self.settings["opacity"] / 100.0)
-            final_alpha = int(255 * base_alpha * icon_progress)  # Fade with progress for smoothness
+            final_alpha = int(255 * base_alpha * icon_progress)
             color = QColor(rgb_color)
             color.setAlpha(max(0, min(final_alpha, 255)))
             if color.alpha() < 1: return
@@ -479,7 +624,7 @@ if HAS_PYSIDE:
             is_appearing = self.buf_state.checkmark_icon.target == 1.0
 
             base_alpha = master_anim * (self.settings["opacity"] / 100.0)
-            final_alpha = int(255 * base_alpha * dim_factor * eased_progress)  # Fade with progress
+            final_alpha = int(255 * base_alpha * dim_factor * eased_progress)
             color = QColor(rgb_color)
             color.setAlpha(max(0, min(final_alpha, 255)))
             if color.alpha() < 1: return
@@ -507,7 +652,7 @@ if HAS_PYSIDE:
                     path.lineTo(p2)
                     t = (eased_progress - split) / (1.0 - split)
                     path.lineTo(p2 + t * (p3 - p2))
-            else:  # Animating out
+            else:
                 path.lineTo(p2)
                 path.lineTo(p3)
 
@@ -562,9 +707,9 @@ def _add_list_options(prop_list: Any, options: List[Tuple[str, str]]) -> None:
 def script_properties() -> Any:
     props = obs.obs_properties_create()
 
-    def add_group(id_str: str, title: str) -> Any:
+    def add_group(id_str: str, title: str, parent: Any = props) -> Any:
         grp = obs.obs_properties_create()
-        obs.obs_properties_add_group(props, id_str, title, obs.OBS_GROUP_NORMAL, grp)
+        obs.obs_properties_add_group(parent, id_str, title, obs.OBS_GROUP_NORMAL, grp)
         return grp
 
     app_grp = add_group("appearance", "Appearance")
@@ -594,12 +739,30 @@ def script_properties() -> Any:
     obs.obs_properties_add_color(buf_grp, "buf_color", STRINGS["buf_color"])
     obs.obs_properties_add_color(buf_grp, "buf_saved_color", STRINGS["buf_saved_color"])
     obs.obs_properties_add_float_slider(buf_grp, "checkmark_duration", STRINGS["checkmark_duration"], 0.5, 5.0, 0.1)
+    obs.obs_properties_add_path(buf_grp, "save_sound_path", STRINGS["save_sound_path"], obs.OBS_PATH_FILE, "Sound files (*.wav *.mp3 *.ogg *.flac)", None)
+    obs.obs_properties_add_int_slider(buf_grp, "save_sound_volume", STRINGS["save_sound_volume"], 0, 200, 1)
 
     fx_grp = add_group("effects", "Effects & Animations")
     obs.obs_properties_add_bool(fx_grp, "fade_effect", STRINGS["fade_effect"])
     obs.obs_properties_add_bool(fx_grp, "smooth_position", STRINGS["smooth_position"])
     obs.obs_properties_add_bool(fx_grp, "animate_pause", STRINGS["animate_pause"])
     obs.obs_properties_add_bool(fx_grp, "animate_checkmark", STRINGS["animate_checkmark"])
+    obs.obs_properties_add_bool(fx_grp, "flash_on_save", STRINGS["flash_on_save"])
+    obs.obs_properties_add_color(fx_grp, "flash_color", STRINGS["flash_color"])
+    obs.obs_properties_add_float_slider(fx_grp, "flash_duration", STRINGS["flash_duration"], 0.1, 2.0, 0.1)
+
+    border_grp = add_group("borders", STRINGS["borders_group"])
+    obs.obs_properties_add_int(border_grp, "border_width", STRINGS["border_width"], 1, 50, 1)
+    rec_border_grp = add_group("rec_border", "Recording Border", border_grp)
+    obs.obs_properties_add_bool(rec_border_grp, "rec_border_enabled", STRINGS["rec_border_enabled"])
+    obs.obs_properties_add_color(rec_border_grp, "rec_border_color", STRINGS["rec_border_color"])
+    obs.obs_properties_add_color(rec_border_grp, "rec_pause_border_color", STRINGS["rec_pause_border_color"])
+    obs.obs_properties_add_bool(rec_border_grp, "rec_pause_border_enabled", STRINGS["rec_pause_border_enabled"])
+    buf_border_grp = add_group("buf_border", "Replay Buffer Border", border_grp)
+    obs.obs_properties_add_bool(buf_border_grp, "buf_border_enabled", STRINGS["buf_border_enabled"])
+    obs.obs_properties_add_color(buf_border_grp, "buf_border_color", STRINGS["buf_border_color"])
+    obs.obs_properties_add_color(buf_border_grp, "buf_save_border_color", STRINGS["buf_save_border_color"])
+    obs.obs_properties_add_bool(buf_border_grp, "buf_save_border_enabled", STRINGS["buf_save_border_enabled"])
 
     return props
 

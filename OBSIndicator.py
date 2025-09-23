@@ -236,7 +236,7 @@ if HAS_PYSIDE:
             self.setWindowTitle("OBS Status Overlay")
             self.setAttribute(Qt.WA_TranslucentBackground)
             self.setAttribute(Qt.WA_ShowWithoutActivating)
-            self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
+            self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Popup)
             self._update_geometry()
             self._setup_platform_specifics()
 

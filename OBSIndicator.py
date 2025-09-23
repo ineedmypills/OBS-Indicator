@@ -251,8 +251,11 @@ if HAS_PYSIDE:
                     log.warning(f"Failed to set window attributes for click-through: {e}")
             else:
                 self.setAttribute(Qt.WA_TransparentForMouseEvents)
-                current_flags = self.windowFlags()
-                self.setWindowFlags(current_flags | Qt.X11BypassWindowManagerHint)
+                is_wayland = 'wayland' in os.environ.get('XDG_SESSION_TYPE', '').lower() or \
+                             'WAYLAND_DISPLAY' in os.environ
+                if not is_wayland:
+                    current_flags = self.windowFlags()
+                    self.setWindowFlags(current_flags | Qt.X11BypassWindowManagerHint)
 
         def _setup_signals(self) -> None:
             self.emitter.rec_status_changed.connect(self.on_rec_status_changed, Qt.QueuedConnection)

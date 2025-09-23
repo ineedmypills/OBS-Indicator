@@ -236,26 +236,19 @@ if HAS_PYSIDE:
             self.setWindowTitle("OBS Status Overlay")
             self.setAttribute(Qt.WA_TranslucentBackground)
             self.setAttribute(Qt.WA_ShowWithoutActivating)
-            self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Popup)
+            self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
             self._update_geometry()
-            self._setup_platform_specifics()
+            self._setup_win32_attributes()
 
-        def _setup_platform_specifics(self) -> None:
-            if os.name == 'nt':
-                try:
-                    hwnd = int(self.winId())
-                    ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002)
-                    ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-                    ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex_style | 0x00080000 | 0x00000020)
-                except Exception as e:
-                    log.warning(f"Failed to set window attributes for click-through: {e}")
-            else:
-                self.setAttribute(Qt.WA_TransparentForMouseEvents)
-                is_wayland = 'wayland' in os.environ.get('XDG_SESSION_TYPE', '').lower() or \
-                             'WAYLAND_DISPLAY' in os.environ
-                if not is_wayland:
-                    current_flags = self.windowFlags()
-                    self.setWindowFlags(current_flags | Qt.X11BypassWindowManagerHint)
+        def _setup_win32_attributes(self) -> None:
+            if os.name != 'nt': return
+            try:
+                hwnd = int(self.winId())
+                ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002)
+                ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+                ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex_style | 0x00080000 | 0x00000020)
+            except Exception as e:
+                log.warning(f"Failed to set window attributes for click-through: {e}")
 
         def _setup_signals(self) -> None:
             self.emitter.rec_status_changed.connect(self.on_rec_status_changed, Qt.QueuedConnection)

@@ -20,7 +20,8 @@
 
 ## 🖥️ Platform Support
 
-**Note:** This script is currently only supported on **Windows**. Due to technical limitations and inconsistencies with how different Linux desktop environments (especially on Wayland) handle overlay windows, the script may not function correctly on Linux.
+> [!NOTE]
+> This script is currently only supported on **Windows**. Due to technical limitations and inconsistencies with how different Linux desktop environments (especially on Wayland) handle overlay windows, the script may not function correctly on Linux.
 
 > [!WARNING]  
 > The functionality to display over **exclusive full-screen** applications is not implemented **and will not be implemented**. It requires deep knowledge in DirectX hooking, as well as certifcation (so that anti-cheat systems do not perceive indicators as cheats).
